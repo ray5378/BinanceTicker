@@ -4,6 +4,7 @@ Windows 托盘图标悬停显示自选币种实时行情（价格/24h涨跌/成�
 右键菜单可动态增删自选币种。
 """
 import re
+import sys
 import threading
 import time
 
@@ -138,7 +139,7 @@ def _get_symbols():
 
 
 def is_selected(symbol):
-    return lambda icon, item: symbol in set(_get_symbols())
+    return lambda item: symbol in set(_get_symbols())
 
 
 def toggle_symbol(symbol):
@@ -238,6 +239,7 @@ def updater_loop(icon):
 
 def main():
     global stream, icon_ref
+    selftest = "--selftest" in sys.argv
     stop_event.clear()
     stream = TickerStream(_get_symbols, on_price, on_status, stop_event)
     stream.update()
@@ -246,8 +248,21 @@ def main():
     icon = pystray.Icon("BinanceTicker", make_icon(),
                         "BinanceTicker 启动中…", menu=Menu(menu_factory))
     icon_ref = icon
+
+    if selftest:
+        def _selftest():
+            time.sleep(6)
+            # 触发菜单重建，验证 checked 回调无异常
+            icon.update_menu()
+            time.sleep(1)
+            stop_event.set()
+            icon.stop()
+        threading.Thread(target=_selftest, daemon=True).start()
+
     threading.Thread(target=updater_loop, args=(icon,), daemon=True).start()
     icon.run()
+    if selftest:
+        print("SELFTEST OK")
 
 
 if __name__ == "__main__":

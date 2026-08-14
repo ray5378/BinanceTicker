@@ -25,6 +25,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Smoke test (tray + menu)
+        run: python main.py --selftest
+
       - name: Build exe
         run: python build.py
 
