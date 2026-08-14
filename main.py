@@ -204,9 +204,7 @@ def do_quit(icon, item):
     icon.stop()
 
 
-def menu_factory(icon):
-    global icon_ref
-    icon_ref = icon
+def menu_factory():
     with status_lock:
         st = status
     return [
@@ -239,7 +237,7 @@ def updater_loop(icon):
 
 
 def main():
-    global stream
+    global stream, icon_ref
     stop_event.clear()
     stream = TickerStream(_get_symbols, on_price, on_status, stop_event)
     stream.update()
@@ -247,6 +245,7 @@ def main():
 
     icon = pystray.Icon("BinanceTicker", make_icon(),
                         "BinanceTicker 启动中…", menu=Menu(menu_factory))
+    icon_ref = icon
     threading.Thread(target=updater_loop, args=(icon,), daemon=True).start()
     icon.run()
 
