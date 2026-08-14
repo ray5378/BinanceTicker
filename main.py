@@ -1,7 +1,7 @@
-"""BinanceTicker - 系统托盘实时币价
+"""BinanceTicker - Windows 桌面常驻实时币价信息栏
 
-Windows 托盘图标悬停显示自选币种实时行情（价格/24h涨跌/成交量），
-右键菜单可动态增删自选币种。
+右下角常驻半透明信息栏，每秒实时刷新自选币种行情（价格/24h涨跌/成交量），
+支持鼠标拖拽，托盘图标右键菜单可动态增删自选币种。
 """
 import re
 import sys
@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pystray import Menu, MenuItem
 
 import config
+from info_bar import InfoBar, UP_COLOR, DOWN_COLOR
 from ticker_ws import TickerStream
 
 POLL_INTERVAL = 1.0
@@ -25,6 +26,7 @@ status_lock = threading.Lock()
 stop_event = threading.Event()
 stream = None
 icon_ref = None
+bar_ref = None
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +65,7 @@ def fmt_volume(value):
 
 
 def line_for(symbol, data):
+    """纯文本行（托盘气泡用）。"""
     if not data:
         return f"{symbol}: …"
     arrow = "\u25b2" if data.get("pct", 0) >= 0 else "\u25bc"
@@ -73,6 +76,20 @@ def line_for(symbol, data):
     )
 
 
+def line_for_bar(symbol, data):
+    """信息栏着色行（白字价格 + 绿涨红跌百分比）。"""
+    if not data:
+        return f"{symbol}: …", None
+    pct = data.get("pct", 0)
+    color = UP_COLOR if pct >= 0 else DOWN_COLOR
+    arrow = "\u25b2" if pct >= 0 else "\u25bc"
+    text = (
+        f"{symbol}  {fmt_price(data.get('price'))}  "
+        f"{arrow}{abs(pct):.2f}%  vol {fmt_volume(data.get('volume'))}"
+    )
+    return text, color
+
+
 def build_summary(symbols, limit=None):
     with prices_lock:
         snapshot = {s: dict(prices.get(s, {})) for s in symbols}
@@ -81,6 +98,13 @@ def build_summary(symbols, limit=None):
     if limit and len(text) > limit:
         text = text[: limit - 3] + "..."
     return text
+
+
+def build_bar(bar, symbols):
+    """构建信息栏内容：返回 (行文本, 行颜色) 列表。"""
+    with prices_lock:
+        snapshot = {s: dict(prices.get(s, {})) for s in symbols}
+    return [line_for_bar(s, snapshot.get(s)) for s in symbols]
 
 
 # ---------------------------------------------------------------------------
@@ -165,29 +189,30 @@ def menu_symbols(icon=None):
 
 
 def prompt_add(icon, item):
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-        root = tk.Tk()
-        root.withdraw()
-        answer = simpledialog.askstring(
-            "添加币种", "输入交易对，如 BTCUSDT 或 BTC", parent=root)
-        root.destroy()
-    except Exception:
-        answer = None
-    if not answer:
-        return
-    symbol = re.sub(r"[^A-Za-z0-9]", "", answer).upper()
-    if not re.fullmatch(r"[A-Z0-9]{5,20}", symbol):
-        return
-    if not symbol.endswith("USDT"):
-        symbol = symbol + "USDT"
-    symbols = _get_symbols()
-    if symbol not in symbols:
-        symbols.append(symbol)
-        config.save_symbols(symbols)
-        stream.update()
-    icon.update_menu()
+    def _run_on_main():
+        if bar_ref is None:
+            return
+        try:
+            from tkinter import simpledialog
+            answer = simpledialog.askstring(
+                "添加币种", "输入交易对，如 BTCUSDT 或 BTC",
+                parent=bar_ref.root)
+        except Exception:
+            answer = None
+        if not answer:
+            return
+        symbol = re.sub(r"[^A-Za-z0-9]", "", answer).upper()
+        if not re.fullmatch(r"[A-Z0-9]{5,20}", symbol):
+            return
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        symbols = _get_symbols()
+        if symbol not in symbols:
+            symbols.append(symbol)
+            config.save_symbols(symbols)
+            stream.update()
+            icon.update_menu()
+    bar_ref.call_after(0, _run_on_main)
 
 
 def show_popup(icon, item):
@@ -202,6 +227,8 @@ def do_quit(icon, item):
     stop_event.set()
     if stream is not None:
         stream.update()
+    if bar_ref is not None:
+        bar_ref.call_after(0, bar_ref.stop)
     icon.stop()
 
 
@@ -237,30 +264,59 @@ def updater_loop(icon):
         time.sleep(POLL_INTERVAL)
 
 
-def main():
+def refresh_bar(bar):
+    """每秒由信息栏主循环调用，更新实时行情。"""
+    symbols = _get_symbols()
+    rows = build_bar(bar, symbols)
+    bar.update_rows(rows)
+
+
+def run_tray():
     global stream, icon_ref
-    selftest = "--selftest" in sys.argv
     stop_event.clear()
     stream = TickerStream(_get_symbols, on_price, on_status, stop_event)
     stream.update()
     stream.start()
 
     icon = pystray.Icon("BinanceTicker", make_icon(),
-                        "BinanceTicker 启动中…", menu=Menu(menu_factory))
+                        "BinanceTicker 运行中", menu=Menu(menu_factory))
     icon_ref = icon
+    threading.Thread(target=updater_loop, args=(icon,), daemon=True).start()
+    try:
+        icon.run()
+    finally:
+        stop_event.set()
+        if bar_ref is not None:
+            bar_ref.call_after(0, bar_ref.stop)
+
+
+def main():
+    global bar_ref
+    selftest = "--selftest" in sys.argv
+
+    def _fire_detail():
+        # 双击信息栏 → 显示气泡行情
+        try:
+            if icon_ref is not None:
+                icon_ref.notify(build_summary(_get_symbols()),
+                                "BinanceTicker 实时行情")
+        except Exception:
+            pass
+
+    bar = InfoBar(on_detail=_fire_detail)
+    bar_ref = bar
+
+    tray_thread = threading.Thread(target=run_tray, daemon=True)
+    tray_thread.start()
 
     if selftest:
         def _selftest():
             time.sleep(6)
-            # 触发菜单重建，验证 checked 回调无异常
-            icon.update_menu()
-            time.sleep(1)
             stop_event.set()
-            icon.stop()
+            bar.call_after(0, bar.stop)
         threading.Thread(target=_selftest, daemon=True).start()
 
-    threading.Thread(target=updater_loop, args=(icon,), daemon=True).start()
-    icon.run()
+    bar.run(refresh_bar)
     if selftest:
         print("SELFTEST OK")
 
