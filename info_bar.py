@@ -4,6 +4,7 @@
 每条行情一行，涨绿跌红，实时刷新。
 """
 import tkinter as tk
+import tkinter.font as tkfont
 
 UP_COLOR = "#0ecb81"
 DOWN_COLOR = "#f6465d"
@@ -11,6 +12,11 @@ BG_COLOR = "#18181a"
 TEXT_COLOR = "#f8f8f8"
 ALPHA = 0.88
 MARGIN = 16
+FRAME_PADX = 12
+TEXT_PAD = 4
+MIN_WIDTH = 260
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_SIZE = 10
 
 
 class InfoBar:
@@ -22,9 +28,11 @@ class InfoBar:
         self.root.configure(bg=BG_COLOR)
 
         self.frame = tk.Frame(self.root, bg=BG_COLOR)
-        self.frame.pack(fill="both", expand=True, padx=12, pady=6)
+        self.frame.pack(fill="both", expand=True,
+                        padx=FRAME_PADX, pady=6)
         self._labels = []
         self._user_moved = False
+        self._font = tkfont.Font(family=FONT_FAMILY, size=FONT_SIZE)
 
         self._bind_drag(self.frame)
         self._bind_drag(self.root)
@@ -62,17 +70,28 @@ class InfoBar:
             return (0, 0, self.root.winfo_screenwidth(),
                     self.root.winfo_screenheight())
 
-    def _place_bottom_right(self):
-        """按当前实际尺寸贴到桌面右下角（用户未拖拽时）。"""
-        if self._user_moved:
-            return
+    def _measure_width(self, rows):
+        """用字体度量最长行的像素宽度，含边距与缓冲。"""
+        max_text = 0
+        for text, _color in rows:
+            w = self._font.measure(text or "")
+            if w > max_text:
+                max_text = w
+        return max(max_text + FRAME_PADX * 2 + TEXT_PAD, MIN_WIDTH)
+
+    def _place_bottom_right(self, width):
+        """贴到桌面右下角，窗口宽度为测量值。用户拖拽过则保留其位置。"""
         self.root.update_idletasks()
+        if self._user_moved:
+            self.root.geometry(f"{width}x{self.root.winfo_reqheight()}")
+            self.root.update_idletasks()
+            return
         left, top, right, bottom = self._work_area()
-        w = self.root.winfo_reqwidth()
         h = self.root.winfo_reqheight()
-        x = max(left, right - w - MARGIN)
+        x = max(left, right - width - MARGIN)
         y = max(top, bottom - h - MARGIN)
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.geometry(f"{width}x{h}+{x}+{y}")
+        self.root.update_idletasks()
 
     # ---- 内容 ----
     def update_rows(self, rows):
@@ -85,12 +104,12 @@ class InfoBar:
             label = tk.Label(self.frame, text=text or "",
                              bg=BG_COLOR, fg=color or TEXT_COLOR,
                              anchor="w", justify="left",
-                             font=("Microsoft YaHei UI", 10))
+                             font=(FONT_FAMILY, FONT_SIZE))
             label.pack(fill="x", anchor="w")
             self._bind_drag(label)
             self._labels.append(label)
 
-        self._place_bottom_right()
+        self._place_bottom_right(self._measure_width(rows))
 
     # ---- 生命周期 ----
     def run(self, refresh_cb, interval_ms=1000):
